@@ -2,8 +2,21 @@ from fastapi import FastAPI
 from routers import booking
 
 app = FastAPI(title="LifeLine Backend", version="1.0")
+from fastapi.middleware.cors import CORSMiddleware
 
-# Bookings router ko include karna
+# CORS configuration to allow requests from any origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+from database import engine
+import models
+
+models.Base.metadata.create_all(bind=engine)
+
 app.include_router(booking.router)
 
 @app.get("/")

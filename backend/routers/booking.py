@@ -1,33 +1,50 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from typing import List
+from sqlalchemy.orm import Session
+from database import get_db
+import models
+from services.triage import evaluate_triage
 from services.fare import calculate_fare
 from services.matching import find_nearest_ambulance_cell
-from services.triage import evaluate_triage
 
 router = APIRouter(prefix="/bookings", tags=["Bookings"])
 
 class BookingRequest(BaseModel):
     lat: float
     lng: float
-    symptoms: List[str]
+    symptoms: str
     distance_km: float
 
 @router.post("/")
-def create_booking(data: BookingRequest):
-    # 1. AI Triage evaluate karo symptoms ke base par
-    triage_result = evaluate_triage(data.symptoms)
-    ambulance_type = triage_result["recommended_ambulance"]
-    
-    # 2. Fixed fare calculate karo recommended ambulance ke hisab se
-    fare = calculate_fare(data.distance_km, ambulance_type)
-    
-    # 3. H3 cell matching se nearest cells nikalo
-    cells = find_nearest_ambulance_cell(data.lat, data.lng, ambulance_type)
-    
+def create_booking(req: BookingRequest, db: Session = Depends(get_db)):
+    # 1. Triage evaluation (Critical vs Moderate)
+    triage_res = evaluate_triage(req.symptoms)
+    needed_type = triage_res["ambulance_type"]
+
+    # 2. Fare calculation
+    fare = calculate_fare(req.distance_km, needed_type)
+
+    # 3. Find nearby H3 cells for ambulance matching
+    matched_cells = find_nearest_ambulance_cell(req.lat, req.lng, needed_type)
+
+    # 4. Save booking record to SQLite database
+    new_booking = models.BookingModel(
+        lat=req.lat,
+        lng=req.lng,
+        symptoms=req.symptoms,
+        triage_level=triage_res["triage_level"],
+        ambulance_type=needed_type,
+        estimated_fare=fare
+    )
+    db.add(new_booking)
+    db.commit()
+    db.refresh(new_booking)
+
+    # 5. Return complete response with Booking ID
     return {
-        "status": "SUCCESS",
-        "triage_analysis": triage_result,
+        "booking_id": new_booking.id,
+        "status": "CONFIRMED",
+        "triage": triage_res,
         "estimated_fare": fare,
-        "matched_h3_cells": cells[:3]
+        "matched_h3_cells": matched_cells
     }
